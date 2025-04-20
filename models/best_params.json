@@ -1,0 +1,27 @@
+{
+    "ElasticNet": {
+        "alpha": 0.01,
+        "l1_ratio": 0.9
+    },
+    "RandomForest": {
+        "n_estimators": 100,
+        "min_samples_split": 2,
+        "min_samples_leaf": 2,
+        "max_depth": 14
+    },
+    "GradientBoosting": {
+        "n_estimators": 200,
+        "min_samples_split": 4,
+        "min_samples_leaf": 4,
+        "max_depth": 7,
+        "learning_rate": 0.2
+    },
+    "XGBoost": {
+        "n_estimators": 200,
+        "learning_rate": 0.03438409030385399,
+        "max_depth": 6,
+        "min_child_weight": 4,
+        "subsample": 0.5282608065058736,
+        "colsample_bytree": 0.9959951438640848
+    }
+}
