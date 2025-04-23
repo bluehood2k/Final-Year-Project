@@ -6,17 +6,22 @@ import plotly.graph_objects as go
 from pathlib import Path
 import json
 import re
-import joblib
-from datetime import datetime
-import requests
 import os
 from PIL import Image
 import io
 import base64
 import chromadb
 from chromadb.config import Settings
-import together
-import uuid
+from together import Together
+from langchain.memory import ConversationBufferMemory
+from langchain.chains import ConversationChain
+from langchain.prompts import PromptTemplate
+from langchain_community.llms import Together as LangchainTogether
+from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Set page config
 st.set_page_config(
@@ -25,17 +30,64 @@ st.set_page_config(
     layout="wide"
 )
 
-# Initialize Together AI API key
-together.api_key = st.secrets.get("TOGETHER_API_KEY", "")
+# Initialize Together AI client
+together_client = Together(api_key=os.getenv("TOGETHER_API_KEY", ""))
 
-# Initialize ChromaDB
+# Initialize LangChain memory and conversation chain
+@st.cache_resource
+def init_conversation():
+    try:
+        # Initialize the LLM
+        llm = LangchainTogether(
+            model="meta-llama/Llama-Vision-Free",
+            temperature=0.7,
+            max_tokens=1024,
+            top_p=0.7,
+            top_k=50,
+            repetition_penalty=1.1,
+        )
+
+        # Create a custom prompt template
+        template = """You are an agricultural assistant that helps users understand crop yields, make predictions, and analyze agricultural data. 
+You should ONLY answer questions related to agriculture, farming, crops, livestock, and food production.
+If a question is not related to agriculture or farming, politely inform the user that you can only answer questions about agriculture and farming.
+
+Current conversation:
+{history}
+
+Human: {input}
+Assistant: Let me help you with that."""
+
+        prompt = PromptTemplate(
+            input_variables=["history", "input"],
+            template=template
+        )
+
+        # Initialize memory
+        memory = ConversationBufferMemory(return_messages=True)
+
+        # Create conversation chain
+        conversation = ConversationChain(
+            llm=llm,
+            memory=memory,
+            prompt=prompt,
+            verbose=True
+        )
+
+        return conversation
+    except Exception as e:
+        st.error(f"Error initializing conversation: {str(e)}")
+        return None
+
+# Initialize ChromaDB with the new configuration
 @st.cache_resource
 def init_chroma():
     try:
-        client = chromadb.Client(Settings(
-            chroma_db_impl="duckdb+parquet",
-            persist_directory="chroma_db"
-        ))
+        # Create the directory if it doesn't exist
+        os.makedirs("chroma_db", exist_ok=True)
+        
+        # Using the new client configuration
+        client = chromadb.PersistentClient(path="chroma_db")
         return client
     except Exception as e:
         st.error(f"Error initializing ChromaDB: {str(e)}")
@@ -50,39 +102,11 @@ def load_data():
         st.error(f"Error loading data: {str(e)}")
         return None
 
-# Load models
-@st.cache_resource
-def load_models():
-    try:
-        models = {}
-        model_files = {
-            "Random Forest": "models/Random Forest.pkl",
-            "XGBoost": "models/XGBoost.pkl",
-            "Gradient Boosting": "models/Gradient Boosting.pkl",
-            "Linear Regression": "models/Linear Regression.pkl"
-        }
-        
-        for name, path in model_files.items():
-            try:
-                models[name] = joblib.load(path)
-            except:
-                st.warning(f"Could not load {name} model")
-        
-        # Load preprocessors
-        try:
-            scaler = joblib.load("models/scaler.pkl")
-            with open("models/selected_features.json", "r") as f:
-                selected_features = json.load(f)
-            return models, scaler, selected_features
-        except:
-            return models, None, None
-    except Exception as e:
-        st.error(f"Error loading models: {str(e)}")
-        return {}, None, None
-
-# Initialize session state for chat history
+# Initialize session state
 if "messages" not in st.session_state:
     st.session_state.messages = []
+if "conversation_history" not in st.session_state:
+    st.session_state.conversation_history = []
 
 # Function to get crop information
 def get_crop_info(df, crop_name):
@@ -120,86 +144,53 @@ def get_county_info(df, county_name):
     
     return f"Information about {county_name}, {state}:\n- Grows {crops} different crops\n- Average yield: {avg_yield:.2f} BU/ACRE"
 
-# Function to get yield prediction
-def get_yield_prediction(df, models, scaler, selected_features, crop, state, county, year, month, **kwargs):
-    if not models or not scaler or not selected_features:
-        return "Sorry, I couldn't load the prediction models. Please try again later."
-    
-    try:
-        # Find the best model (Random Forest if available)
-        model_name = "Random Forest" if "Random Forest" in models else list(models.keys())[0]
-        model = models[model_name]
-        
-        # Prepare input data
-        input_data = {
-            "year": int(year),
-            "Month": int(month),
-            "state": df[df['state'] == state]['state'].astype("category").cat.codes.iloc[0],
-            "county": df[df['county'] == county]['county'].astype("category").cat.codes.iloc[0]
-        }
-        
-        # Add numeric features
-        for key, value in kwargs.items():
-            if key in df.columns and df[key].dtype in ['float64', 'int64']:
-                input_data[key] = float(value)
-        
-        # Create one-hot encoded commodity features
-        all_commodities = sorted(df["commodity_desc"].unique())
-        for commodity in all_commodities:
-            input_data[f"commodity_desc_{commodity}"] = 1 if commodity == crop else 0
-        
-        # Create feature vector
-        X = pd.DataFrame([input_data])
-        
-        # Get the feature names from the scaler
-        scaler_feature_names = scaler.feature_names_in_
-        
-        # Ensure numeric features are in the same order as the scaler
-        X_numeric = X[scaler_feature_names]
-        
-        # Scale numerical features
-        X_scaled = scaler.transform(X_numeric)
-        
-        # Create a new DataFrame with scaled features
-        X_scaled_df = pd.DataFrame(X_scaled, columns=scaler_feature_names)
-        
-        # Add one-hot encoded commodity features
-        for commodity in all_commodities:
-            X_scaled_df[f"commodity_desc_{commodity}"] = 1 if commodity == crop else 0
-        
-        # Select only the features used during training
-        X_selected = X_scaled_df[selected_features]
-        
-        # Make prediction
-        prediction = model.predict(X_selected)[0]
-        
-        return f"Predicted yield for {crop} in {county}, {state} for {month}/{year}: {prediction:.2f} BU/ACRE"
-    
-    except Exception as e:
-        return f"Error making prediction: {str(e)}"
-
-# Function to process user query with RAG
-def process_query_with_rag(query, df, models, scaler, selected_features, client):
+# Function to process user query
+def process_query(query, df):
     # First, check if it's a structured query that we can handle directly
-    direct_response = process_structured_query(query, df, models, scaler, selected_features)
+    direct_response = process_structured_query(query, df)
     if direct_response and not direct_response.startswith("I'm not sure"):
         return direct_response
     
-    # If not a structured query, use RAG with Together AI
+    # If not a structured query, use the Together API directly with conversation history
     try:
-        # Get relevant context from ChromaDB
-        context = get_relevant_context(query, client)
+        # Prepare messages with conversation history
+        messages = []
         
-        # Generate response using Together AI
-        response = generate_response_with_together(query, context)
+        # Add system message to instruct the model
+        messages.append({
+            "role": "system", 
+            "content": "You are an agricultural assistant that helps users understand crop yields, make predictions, and analyze agricultural data. You should ONLY answer questions related to agriculture, farming, crops, livestock, and food production. If a question is not related to agriculture or farming, DO NOT answer the question and politely inform the user that you can only answer questions about agriculture and farming."
+        })
         
-        return response
+        # Add conversation history (up to the last 5 exchanges to keep context manageable)
+        for i in range(max(0, len(st.session_state.conversation_history) - 10), len(st.session_state.conversation_history), 2):
+            if i + 1 < len(st.session_state.conversation_history):
+                messages.append({"role": "user", "content": st.session_state.conversation_history[i]})
+                messages.append({"role": "assistant", "content": st.session_state.conversation_history[i+1]})
+        
+        # Add the current query
+        messages.append({"role": "user", "content": query})
+        
+        # Use the Together API with conversation history
+        response = together_client.chat.completions.create(
+            model="meta-llama/Llama-Vision-Free",
+            messages=messages
+        )
+        
+        # Get the response
+        response_text = response.choices[0].message.content
+        
+        # Update conversation history
+        st.session_state.conversation_history.append(query)
+        st.session_state.conversation_history.append(response_text)
+        
+        return response_text
     except Exception as e:
-        st.error(f"Error in RAG processing: {str(e)}")
+        st.error(f"Error processing query: {str(e)}")
         return "I'm having trouble processing your query. Please try again or ask a more specific question."
 
 # Function to process structured queries
-def process_structured_query(query, df, models, scaler, selected_features):
+def process_structured_query(query, df):
     query = query.lower()
     
     # Check for crop information request
@@ -229,173 +220,54 @@ def process_structured_query(query, df, models, scaler, selected_features):
         month = prediction_match.group(4).strip()
         year = prediction_match.group(5).strip()
         
-        # Get default values for other features
-        default_values = {}
-        numeric_cols = [col for col in df.columns if df[col].dtype in ['float64', 'int64'] 
-                       and col not in ['YIELD, MEASURED IN BU / ACRE', 'year', 'Month', 'state', 'county']]
-        
-        for col in numeric_cols:
-            default_values[col] = df[col].mean()
-        
-        return get_yield_prediction(df, models, scaler, selected_features, crop, state, county, year, month, **default_values)
+        return f"I can help you predict the yield for {crop} in {county}, {state} for {month}/{year}. Please use the Prediction page for detailed yield predictions with all available features."
     
-    # Check for help request
-    if 'help' in query or 'what can you do' in query:
-        return """I can help you with the following:
-1. Get information about a crop (e.g., "Information about corn?")
-2. Get information about a state (e.g., "Information about California state?")
-3. Get information about a county (e.g., "Information about Los Angeles county?")
-4. Predict yield (e.g., "Predict yield for corn in Los Angeles, California for 6/2023?")
-5. Show available crops, states, or counties
-6. Answer general agricultural questions using AI
-
-Just ask me a question!"""
-    
-    # Check for available crops, states, or counties
-    if 'available crops' in query:
-        crops = sorted(df['commodity_desc'].unique())
-        return f"Available crops: {', '.join(crops[:10])}... (and {len(crops)-10} more)"
-    
-    if 'available states' in query:
-        states = sorted(df['state'].unique())
-        return f"Available states: {', '.join(states)}"
-    
-    if 'available counties' in query:
-        counties = sorted(df['county'].unique())
-        return f"Available counties: {', '.join(counties[:10])}... (and {len(counties)-10} more)"
-    
-    # Default response
-    return "I'm not sure how to answer that. Try asking for information about a crop, state, or county, or ask for a yield prediction. Type 'help' for more information."
-
-# Function to get relevant context from ChromaDB
-def get_relevant_context(query, client):
-    if not client:
-        return "No context available."
-    
-    try:
-        # Get the collection
-        collection = client.get_or_create_collection("agricultural_knowledge")
-        
-        # Query the collection
-        results = collection.query(
-            query_texts=[query],
-            n_results=3
-        )
-        
-        # Extract and format the context
-        if results and results['documents'] and results['documents'][0]:
-            context = "\n\n".join(results['documents'][0])
-            return context
-        else:
-            return "No relevant information found in the knowledge base."
-    except Exception as e:
-        st.error(f"Error retrieving context: {str(e)}")
-        return "Error retrieving context from knowledge base."
-
-# Function to generate response using Together AI
-def generate_response_with_together(query, context):
-    if not together.api_key:
-        return "Together AI API key not configured. Please set up your API key."
-    
-    try:
-        # Prepare the prompt
-        prompt = f"""You are an agricultural expert assistant. Use the following context to answer the question.
-If the context doesn't contain relevant information, you can provide general agricultural knowledge.
-
-Context:
-{context}
-
-Question: {query}
-
-Answer:"""
-        
-        # Generate response using Together AI
-        response = together.Complete.create(
-            prompt=prompt,
-            model="togethercomputer/llama-2-70b-chat",
-            max_tokens=512,
-            temperature=0.7,
-            top_p=0.7,
-            top_k=50,
-            repetition_penalty=1.1,
-        )
-        
-        # Extract the response text
-        response_text = response['output']['choices'][0]['text']
-        
-        return response_text
-    except Exception as e:
-        st.error(f"Error generating response: {str(e)}")
-        return "I'm having trouble generating a response. Please try again."
-
-# Function to process uploaded files
-def process_uploaded_file(uploaded_file, client):
-    if not client:
-        return "ChromaDB not initialized. Cannot process file."
-    
-    try:
-        # Get file content
-        file_content = uploaded_file.getvalue()
-        
-        # Process based on file type
-        if uploaded_file.type == "application/pdf":
-            # For PDF files, we would use a PDF parser
-            # This is a placeholder - in a real implementation, you would use a PDF library
-            text_content = f"Content from PDF file: {uploaded_file.name}"
-        elif uploaded_file.type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-            # For DOCX files, we would use a DOCX parser
-            # This is a placeholder - in a real implementation, you would use a DOCX library
-            text_content = f"Content from DOCX file: {uploaded_file.name}"
-        else:
-            # For text files
-            text_content = file_content.decode("utf-8")
-        
-        # Add to ChromaDB
-        collection = client.get_or_create_collection("agricultural_knowledge")
-        
-        # Generate a unique ID
-        doc_id = str(uuid.uuid4())
-        
-        # Add the document
-        collection.add(
-            documents=[text_content],
-            ids=[doc_id],
-            metadatas=[{"source": uploaded_file.name, "type": uploaded_file.type}]
-        )
-        
-        return f"File '{uploaded_file.name}' processed and added to knowledge base."
-    except Exception as e:
-        st.error(f"Error processing file: {str(e)}")
-        return f"Error processing file: {str(e)}"
+    return None
 
 # Main app
-st.title("🌾 Agricultural Assistant")
-
-# Load data and models
-df = load_data()
-models, scaler, selected_features = load_models()
-client = init_chroma()
-
-if df is not None:
-    # Display chat interface
-    st.write("Ask me anything about agricultural data, crops, or yield predictions!")
+def main():
+    st.title("Agricultural Assistant")
     
-    # File upload for knowledge base
-    with st.expander("Upload Agricultural Documents"):
-        st.write("Upload PDF, DOCX, or text files to enhance the chatbot's knowledge.")
-        uploaded_file = st.file_uploader("Choose a file", type=["pdf", "docx", "txt"])
-        if uploaded_file:
-            if st.button("Process File"):
-                result = process_uploaded_file(uploaded_file, client)
-                st.write(result)
+    # Load data
+    df = load_data()
+    client = init_chroma()
     
-    # Display chat history
+    if df is None:
+        st.error("Error loading data. Please check the console for details.")
+        return
+    
+    # Sidebar
+    with st.sidebar:
+        st.header("About")
+        st.write("""
+        This agricultural assistant can help you with:
+        - Getting information about crops, states, and counties
+        - Answering general agricultural questions
+        - Providing guidance on using the prediction page
+        """)
+        
+        st.header("Example Questions")
+        st.write("""
+        - "What's the average yield for corn in Iowa?"
+        - "Tell me about California's agricultural production"
+        - "What crops are grown in Texas?"
+        - "How can I predict crop yields?"
+        - "What are some easy crops to grow as a beginner?"
+        """)
+        
+        # Add a button to clear conversation history
+        if st.button("Clear Conversation History"):
+            st.session_state.conversation_history = []
+            st.session_state.messages = []
+            st.success("Conversation history cleared!")
+    
+    # Display chat messages
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.write(message["content"])
     
     # Chat input
-    if prompt := st.chat_input("What would you like to know?"):
+    if prompt := st.chat_input("What would you like to know about agriculture?"):
         # Add user message to chat history
         st.session_state.messages.append({"role": "user", "content": prompt})
         
@@ -403,32 +275,13 @@ if df is not None:
         with st.chat_message("user"):
             st.write(prompt)
         
-        # Process query and get response
-        response = process_query_with_rag(prompt, df, models, scaler, selected_features, client)
-        
-        # Add assistant response to chat history
-        st.session_state.messages.append({"role": "assistant", "content": response})
-        
-        # Display assistant response
+        # Get bot response
         with st.chat_message("assistant"):
+            response = process_query(prompt, df)
             st.write(response)
-    
-    # Sidebar with examples
-    with st.sidebar:
-        st.subheader("Example Questions")
-        st.write("Try asking:")
-        st.write("- Information about corn?")
-        st.write("- Information about California state?")
-        st.write("- Information about Los Angeles county?")
-        st.write("- Predict yield for corn in Los Angeles, California for 6/2023?")
-        st.write("- What crops are available?")
-        st.write("- What states are available?")
-        st.write("- What counties are available?")
-        st.write("- How does temperature affect crop yields?")
-        st.write("- What are the best practices for irrigation?")
-        
-        st.subheader("About")
-        st.write("This chatbot uses RAG (Retrieval-Augmented Generation) with Together AI's Llama 3.2 Vision model to provide intelligent responses to agricultural questions.")
-        st.write("You can upload agricultural documents to enhance the chatbot's knowledge base.")
-else:
-    st.error("Failed to load the dataset. Please check if the file exists and is accessible.") 
+            
+            # Add assistant response to chat history
+            st.session_state.messages.append({"role": "assistant", "content": response})
+
+if __name__ == "__main__":
+    main() 
