@@ -13,7 +13,7 @@ import joblib
 from datetime import datetime
 import statsmodels.api as sm
 
-st.set_page_config(page_title="Agricultural Dashboard", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Dashboard", page_icon="📊", layout="wide")
 
 # Cache the data loading
 @st.cache_data

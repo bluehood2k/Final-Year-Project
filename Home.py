@@ -3,7 +3,7 @@ from PIL import Image
 
 # Configure the main page
 st.set_page_config(
-    page_title="Precision Agriculture",
+    page_title="Agricultural Data Analysis",
     page_icon="🌾",
     layout="wide",
     initial_sidebar_state="expanded"  # This ensures the sidebar is visible
@@ -18,23 +18,44 @@ with col1:
     st.image(logo, width=150)
 
 with col2:
-    st.title("Precision Agriculture Yield Prediction")
+    st.title("🌾 Agricultural Data Analysis and Prediction System")
 
 st.markdown("""
-### Welcome to the Precision Agriculture Platform
+Welcome to the Agricultural Data Analysis and Prediction System! This application helps you:
 
-This intelligent platform combines machine learning and agricultural expertise to help you:
+- 📊 Visualize agricultural data through an interactive dashboard
+- 🔮 Predict crop yields using machine learning models
+- 💬 Get answers to your agricultural questions through our AI assistant
 
-- 📊 **Visualize Historical Data**: Analyze past crop performance through interactive charts
-- 🔮 **Predict Crop Yields**: Use multiple ML models to forecast future yields
-- 🌱 **Make Informed Decisions**: Get data-driven insights for better farming decisions
+Choose a page from the sidebar to get started!
+""")
 
-#### Available Models:
-- Deep Learning (Neural Network)
-- Random Forest
-- XGBoost
-- Gradient Boosting
-- Linear Regression
+st.subheader("Quick Start Guide")
+col1, col2, col3 = st.columns(3)
 
-Select a page from the sidebar to get started!
-""") 
+with col1:
+    st.markdown("""
+    ### 📊 Dashboard
+    Explore interactive visualizations of agricultural data including:
+    - Crop yield trends
+    - State-wise comparisons
+    - Variable relationships
+    """)
+
+with col2:
+    st.markdown("""
+    ### 🔮 Prediction
+    Predict crop yields by:
+    - Selecting location
+    - Choosing crop type
+    - Entering environmental factors
+    """)
+
+with col3:
+    st.markdown("""
+    ### 💬 AI Assistant
+    Get instant answers about:
+    - Crop information
+    - Yield predictions
+    - Agricultural practices
+    """) 
