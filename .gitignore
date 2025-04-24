@@ -45,15 +45,17 @@ ENV/
 
 # Data files
 *.csv
+!merged_data.csv
 *.xlsx
 *.xls
 *.db
 *.sqlite3
 
 # Model files
-*.pkl
-*.h5
-*.joblib
+# Commenting out model ignores to allow pushing models
+# *.pkl
+# *.h5
+# *.joblib
 
 # Logs
 *.log
