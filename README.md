@@ -8,12 +8,62 @@ A modern, professional full-stack web application that presents agricultural dat
 - **Yield Prediction**: Predict crop yields based on environmental and agricultural factors
 - **Agricultural Assistant**: Chatbot that answers agriculture-related queries using RAG (Retrieval-Augmented Generation)
 
+## Deployment on Vercel
+
+1. Install Vercel CLI:
+```bash
+npm install -g vercel
+```
+
+2. Login to Vercel:
+```bash
+vercel login
+```
+
+3. Deploy the app:
+```bash
+vercel
+```
+
+4. For production deployment:
+```bash
+vercel --prod
+```
+
+## Environment Variables
+
+Create a `.env` file with the following variables:
+```
+OPENAI_API_KEY=your_openai_api_key
+```
+
+## Local Development
+
+1. Create a virtual environment:
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
+
+2. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+3. Run the app:
+```bash
+streamlit run Home.py
+```
+
 ## Project Structure
 
 - `pages/1_📊_Dashboard.py`: Interactive dashboard with data visualizations
 - `pages/2_🔮_Prediction.py`: Form for yield predictions using pre-trained models
 - `pages/3_💬_Chatbot.py`: Agricultural assistant chatbot with RAG capabilities
 - `models/`: Directory containing pre-trained models and preprocessors
+- `data/`: Dataset files
+- `requirements.txt`: Python dependencies
+- `vercel.json`: Vercel deployment configuration
 
 ## Technologies Used
 
