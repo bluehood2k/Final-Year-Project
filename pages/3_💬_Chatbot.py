@@ -1,28 +1,16 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.express as px
-import plotly.graph_objects as go
-from pathlib import Path
 import json
-import re
 import os
-from PIL import Image
-import io
-import base64
-import chromadb
-from chromadb.config import Settings
+from datetime import datetime
 from together import Together
 from langchain.memory import ConversationBufferMemory
 from langchain.chains import ConversationChain
 from langchain.prompts import PromptTemplate
 from langchain_community.llms import Together as LangchainTogether
-from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
 from dotenv import load_dotenv
-from datetime import datetime
-import pysqlite3
-import sys
-sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+import re
 
 # Load environment variables
 load_dotenv()
@@ -83,19 +71,6 @@ Assistant: Let me help you with that."""
         st.error(f"Error initializing conversation: {str(e)}")
         return None
 
-# Initialize ChromaDB with persistent settings
-@st.cache_resource
-def init_chroma():
-    try:
-        client = chromadb.Client(Settings(
-            chroma_db_impl="duckdb+parquet",
-            persist_directory="chroma_db"
-        ))
-        return client
-    except Exception as e:
-        st.error(f"Error initializing ChromaDB: {str(e)}")
-        return None
-
 # Load data
 @st.cache_data
 def load_data():
@@ -147,6 +122,41 @@ def get_county_info(df, county_name):
     
     return f"Information about {county_name}, {state}:\n- Grows {crops} different crops\n- Average yield: {avg_yield:.2f} BU/ACRE"
 
+# Function to process structured queries
+def process_structured_query(query, df):
+    query = query.lower()
+    
+    # Check for crop information request
+    crop_match = re.search(r'information about (.*?)(?:\?|$)', query)
+    if crop_match:
+        crop_name = crop_match.group(1).strip()
+        return get_crop_info(df, crop_name)
+    
+    # Check for state information request
+    state_match = re.search(r'information about (.*?) state(?:\?|$)', query)
+    if state_match:
+        state_name = state_match.group(1).strip()
+        return get_state_info(df, state_name)
+    
+    # Check for county information request
+    county_match = re.search(r'information about (.*?) county(?:\?|$)', query)
+    if county_match:
+        county_name = county_match.group(1).strip()
+        return get_county_info(df, county_name)
+    
+    # Check for yield prediction request
+    prediction_match = re.search(r'predict yield for (.*?) in (.*?), (.*?) for (.*?)/(.*?)(?:\?|$)', query)
+    if prediction_match:
+        crop = prediction_match.group(1).strip()
+        county = prediction_match.group(2).strip()
+        state = prediction_match.group(3).strip()
+        month = prediction_match.group(4).strip()
+        year = prediction_match.group(5).strip()
+        
+        return f"I can help you predict the yield for {crop} in {county}, {state} for {month}/{year}. Please use the Prediction page for detailed yield predictions with all available features."
+    
+    return None
+
 # Function to process user query
 def process_query(query, df):
     # First, check if it's a structured query that we can handle directly
@@ -192,48 +202,12 @@ def process_query(query, df):
         st.error(f"Error processing query: {str(e)}")
         return "I'm having trouble processing your query. Please try again or ask a more specific question."
 
-# Function to process structured queries
-def process_structured_query(query, df):
-    query = query.lower()
-    
-    # Check for crop information request
-    crop_match = re.search(r'information about (.*?)(?:\?|$)', query)
-    if crop_match:
-        crop_name = crop_match.group(1).strip()
-        return get_crop_info(df, crop_name)
-    
-    # Check for state information request
-    state_match = re.search(r'information about (.*?) state(?:\?|$)', query)
-    if state_match:
-        state_name = state_match.group(1).strip()
-        return get_state_info(df, state_name)
-    
-    # Check for county information request
-    county_match = re.search(r'information about (.*?) county(?:\?|$)', query)
-    if county_match:
-        county_name = county_match.group(1).strip()
-        return get_county_info(df, county_name)
-    
-    # Check for yield prediction request
-    prediction_match = re.search(r'predict yield for (.*?) in (.*?), (.*?) for (.*?)/(.*?)(?:\?|$)', query)
-    if prediction_match:
-        crop = prediction_match.group(1).strip()
-        county = prediction_match.group(2).strip()
-        state = prediction_match.group(3).strip()
-        month = prediction_match.group(4).strip()
-        year = prediction_match.group(5).strip()
-        
-        return f"I can help you predict the yield for {crop} in {county}, {state} for {month}/{year}. Please use the Prediction page for detailed yield predictions with all available features."
-    
-    return None
-
 # Main app
 def main():
     st.title("Agricultural Assistant")
     
     # Load data
     df = load_data()
-    client = init_chroma()
     
     if df is None:
         st.error("Error loading data. Please check the console for details.")

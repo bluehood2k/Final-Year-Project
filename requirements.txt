@@ -13,8 +13,6 @@ seaborn==0.13.2
 matplotlib==3.10.1
 statsmodels==0.14.4
 Pillow==11.2.1
-pysqlite3-binary==0.5.1
-chromadb==0.4.22
 together==1.5.5
 protobuf>=3.20,<6.0
 colorama==0.4.6
