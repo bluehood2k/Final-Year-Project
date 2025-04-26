@@ -19,6 +19,10 @@ from langchain.prompts import PromptTemplate
 from langchain_community.llms import Together as LangchainTogether
 from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
 from dotenv import load_dotenv
+from datetime import datetime
+import pysqlite3
+import sys
+sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 
 # Load environment variables
 load_dotenv()
@@ -79,15 +83,14 @@ Assistant: Let me help you with that."""
         st.error(f"Error initializing conversation: {str(e)}")
         return None
 
-# Initialize ChromaDB with the new configuration
+# Initialize ChromaDB with persistent settings
 @st.cache_resource
 def init_chroma():
     try:
-        # Create the directory if it doesn't exist
-        os.makedirs("chroma_db", exist_ok=True)
-        
-        # Using the new client configuration
-        client = chromadb.PersistentClient(path="chroma_db")
+        client = chromadb.Client(Settings(
+            chroma_db_impl="duckdb+parquet",
+            persist_directory="chroma_db"
+        ))
         return client
     except Exception as e:
         st.error(f"Error initializing ChromaDB: {str(e)}")
