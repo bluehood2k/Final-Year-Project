@@ -23,5 +23,4 @@ cryptography==44.0.2
 setuptools>=68.0.0
 wheel>=0.40.0
 threadpoolctl>=2.0.0
-pysqlite3-binary==0.5.2
 
